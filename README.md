@@ -70,7 +70,7 @@ cargo install sqlx-cli
 Next, ensure you have set `DATABASE_URL` environment variable to be a valid Postgres connection URL:
 
 ```bash
-export DATABASE_URL=postgres://localhost:5432/postgres
+export DATABASE_URL=postgres://postgres:postgresdb@localhost:5432/postgres
 ```
 
 Finally, you need to create the table that is used in the examples by running the only migration script:

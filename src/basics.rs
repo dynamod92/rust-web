@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+// this is a "block attribute". We know that because of the "!", which means it's attached to the entire file.
 #![allow(unreachable_code)]
 
 //!
@@ -15,13 +16,14 @@
 //!  
 
 #[allow(unused_imports)]
+// this is an attribute that applies to the next item in the file only.
 use axum::{
     body::Body,
     http::{Method, Request},
     response::Html,
     routing::*,
     Json, Router,
-};
+}; // use is kind of like import, but it has an advantage of de-duplication and aliasing.
 
 ///
 /// In this "hello world" example, you can see the core elements of an Axum
@@ -37,14 +39,25 @@ pub async fn hello_world() {
     // build our application with a route
     let app = Router::new().route("/", get(handler));
 
+    // merge other routes in file from other functions
+    let merge_app = build_router(app);
+
+    // The function route() looks like it's a method, but it's actually a function that returns a Router.
+    // get() is a method from the Router that indicates this route will use the GET HTTP method.
+    // This works in Rust because the first argument to a method is always a reference to the object itself.
+
     // run it
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
         .await
         .unwrap();
+    // Unwrap should not be used in production code.
+    // It's a way to quickly handle errors in examples, but it's not a good practice.
 
     println!("Listening on {}", listener.local_addr().unwrap());
+    // Rust macros are like functions, but they're evaluated at compile time.
+    // They are powerful because they can do things that functions can't, like generate code.
 
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, merge_app).await.unwrap();
 }
 
 ///
@@ -57,7 +70,8 @@ pub async fn hello_world() {
 /// and that it properly serves the static HTML.
 ///
 async fn handler() -> Html<&'static str> {
-    todo!()
+    println!("in the hello_world handler");
+    Html("<h1>🌎 Hello, World!</h1>")
 }
 
 ///
@@ -71,12 +85,24 @@ async fn handler() -> Html<&'static str> {
 /// PUT /users/:id
 /// DELETE /users/:id
 ///
-fn build_router<S: Clone + Send + Sync + 'static>(_router: Router<S>) -> Router<S> {
-    todo!()
+///
+/// // this function accepts any type "S", but it has to have methods of Clone, Send, Sync, and 'static.
+/// // this is a polymorphic function, which means it can work with any type that satisfies the constraints.
+/// The "<>" syntax is used to specify a generic type, which is a placeholder for a type that will be provided later.
+fn build_router<S: Clone + Send + Sync + 'static>(router: Router<S>) -> Router<S> {
+    // _router is not used in this function, but it's a good practice to keep it in the function signature.
+    // Preceding an unused variable with an underscore is a convention in Rust to indicate that the variable is unused.
+    router
+        .route("/users", get(dummy_handler))
+        .route("/users/:id", get(dummy_handler))
+        .route("/users", post(dummy_handler))
+        .route("/users/:id", put(dummy_handler))
+        .route("/users/:id", delete(dummy_handler))
 }
 
 async fn dummy_handler() -> Html<&'static str> {
-    Html("<h1>Dummy Handler</h1>")
+    println!("in the dummy handler");
+    Html("<h1>🤪 Dummy Handler</h1>")
 }
 
 ///
@@ -87,9 +113,14 @@ async fn dummy_handler() -> Html<&'static str> {
 /// What are the semantics of the resulting router?
 ///
 fn merge_routers<S: Clone + Send + Sync + 'static>(left: Router<S>, right: Router<S>) -> Router<S> {
-    let (_, _) = (left, right);
+    // 'static means that if S contains references,
+    // they must have a lifetime of 'static, meaning they must live for the entire duration of the program.
+    // aka if you get rid of the pointer, this type won't be able to live on its own.
 
-    todo!()
+    // This is an example of destructuring a tuple.
+    // let (_, _) = (left, right);
+
+    left.merge(right)
 }
 
 ///
@@ -103,15 +134,16 @@ fn merge_routers<S: Clone + Send + Sync + 'static>(left: Router<S>, right: Route
 /// In the following example, use the `nest` method to nest all of the user
 /// routes under the `/users` path prefix of the specified router.
 ///
-fn nest_router<S: Clone + Send + Sync + 'static>(_router: Router<S>) -> Router<S> {
-    let _user_routes = Router::<S>::new()
+fn nest_router<S: Clone + Send + Sync + 'static>(router: Router<S>) -> Router<S> {
+    let user_routes = Router::<S>::new()
         .route("/", get(handler))
         .route("/:id", get(handler))
         .route("/", post(handler))
         .route("/:id", put(handler))
         .route("/:id", delete(handler));
 
-    todo!()
+    router.nest("/users", user_routes)
+    // this puts the user_routes under the /users path prefix of the specified router.
 }
 
 ///
@@ -126,23 +158,64 @@ fn nest_router<S: Clone + Send + Sync + 'static>(_router: Router<S>) -> Router<S
 /// for what reasons.
 ///
 #[tokio::test]
+
+// This version doesn't use ? to propagate errors up the call stack, which apparently is better for testing.
 async fn test_routes() {
     // for Body::collect
     use http_body_util::BodyExt;
     /// for ServiceExt::oneshot
     use tower::util::ServiceExt;
 
-    let _app = Router::new().route("/users", get(identity_handler));
+    let app = Router::new().route("/users", get(identity_handler));
 
-    let _req: Request<Body> = todo!("Use Request::builder");
+    let req: Request<Body> = Request::builder()
+        .method(Method::GET)
+        .uri("/users")
+        .body(Body::empty())
+        .unwrap();
 
-    let response = _app.oneshot(_req).await.unwrap();
+    let response = app.oneshot(req).await.unwrap();
 
     let body = response.into_body().collect().await.unwrap().to_bytes();
 
     let body_as_string = String::from_utf8(body.to_vec()).unwrap();
 
     assert_eq!(body_as_string, "/users");
+}
+///
+///
+#[tokio::test] // this is required because it's an async test
+async fn test_routes_prod() -> Result<(), String> {
+    // for Body::collect
+    use http_body_util::BodyExt;
+    /// for ServiceExt::oneshot
+    use tower::util::ServiceExt;
+
+    let app = Router::new().route("/users", get(identity_handler));
+
+    let req: Request<Body> = Request::builder()
+        .method(Method::GET)
+        .uri("/users")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(req).await.map_err(|e| e.to_string())?;
+    // the "?" operator is used to propagate errors up the call stack.
+    // This is useful in production code because it makes error handling more concise.
+    // To handle this error up the call stack, this function must return a "Result" type.
+
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .map_err(|e| e.to_string())?
+        .to_bytes();
+
+    let body_as_string = String::from_utf8(body.to_vec()).map_err(|e| e.to_string())?;
+
+    assert_eq!(body_as_string, "/users");
+
+    Ok(())
 }
 
 ///
@@ -177,12 +250,48 @@ async fn test_basic_json() {
 
     let body = response.into_body().collect().await.unwrap().to_bytes();
 
-    let _body_as_string = String::from_utf8(body.to_vec()).unwrap();
+    let body_as_string = String::from_utf8(body.to_vec()).unwrap();
 
-    todo!("assert_eq");
+    assert_eq!(body_as_string, "{}");
 }
-async fn return_json_hello_world() -> Json<String> {
-    Json(todo!("Return a JSON response here!"))
+async fn return_json_hello_world() -> Json<Dummy> {
+    // use serde_json::json! to create a JSON object
+    Json(Dummy {})
+}
+
+// Serialize and Copy are traits that are automatically derived for a struct when it's created.
+// Copy is a trait that allows a type to be copied by value, which means it can be cloned without using the heap, which is faster
+// and means that you don't have to worry about ownership or borrowing.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy)] // commented out in favor of manual implementation below.
+struct Dummy {}
+
+// DIY serialization for Dummy data type
+// impl serde::Serialize for Dummy {
+//     // for some reason, we decided to implement our own serializer lol
+//     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+//     where
+//         S: serde::Serializer,
+//     {
+//         use serde::ser::SerializeStruct; // weird to use imports here but ok
+
+//         let struct_serializer = serializer.serialize_struct("Dummy", 0)?;
+
+//         struct_serializer.end()
+//     }
+// }
+
+// notice that imple is separate from the struct definition because they work together to define the struct in an extensible way.
+impl Dummy {
+    fn new() -> Self {
+        // creates constructor for Dummy
+        println!("I made a dummy!");
+        Dummy {} // returns the struct "Dummy"
+    }
+    fn to_string(&self) -> String {
+        // creates a method for Dummy
+        let _ = "test"; // this has a type of string slice
+        "Dummy".to_string() // returns a string instead of a struct
+    }
 }
 
 async fn identity_handler(request: Request<Body>) -> Body {

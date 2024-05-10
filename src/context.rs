@@ -19,12 +19,17 @@
 //! In this section, you will explore these mechanisms.
 //!
 
+use std::{collections::HashMap, sync::Arc};
+
 #[allow(unused_imports)]
 use axum::extract::State;
+use axum::{extract::Path, response::IntoResponse, Json};
 #[allow(unused_imports)]
 use axum::{body::Body, http::Method, routing::*};
 #[allow(unused_imports)]
 use hyper::Request;
+use hyper::{Response, StatusCode};
+use tokio::sync::Mutex;
 
 ///
 /// EXERCISE 1
@@ -42,11 +47,32 @@ async fn closure_shared_context() {
     /// for ServiceExt::oneshot
     use tower::util::ServiceExt;
 
+    // this is an example of how to use closures to share context.
     let _gbp_to_usd_rate = 1.3;
 
     let _app = Router::<()>::new()
-        .route("/usd_to_gbp", get(todo!("Make a closure")))
-        .route("/gbp_to_usd", get(todo!("Make a closure")));
+        .route(
+            "/usd_to_gbp",
+            get(move |usd: String| async move { 
+                // The first instance of "move" moves the closure into the async block. This is necessary because the closure
+                // is a separate type from the async block, and the async block needs to own the closure. The second instance of
+                // "move" moves the variables into the closure. This is necessary because the closure will be called multiple times,
+                // and the variables need to be available each time.
+                convert_usd_to_gbp(usd, _gbp_to_usd_rate) 
+
+                // if any variable in here doesn't implement Clone, the closure won't implement Clone, which means
+                // it can't be used in the route. This is why the _gbp_to_usd_rate is moved into the closure. F64 does implement Clone.
+                
+                // Note: This is *not* an async closure, it just happens to have an async block inside it.
+                // Eventually, Rust will support entire async closures, but for now, you have to use this pattern.
+
+                // 💁‍♀️ If the function wasn't async, you wouldn't need the second "move" keyword at all.
+            }),)
+        .route(
+            "/gbp_to_usd",
+            get(move |gbp: String| async move { 
+                convert_gbp_to_usd(gbp, _gbp_to_usd_rate) 
+            }),);
 
     let response = _app
         .oneshot(
@@ -65,6 +91,7 @@ async fn closure_shared_context() {
 
     assert_eq!(_body_as_string, "130");
 }
+
 fn convert_usd_to_gbp(usd: String, gbp_to_usd_rate: f64) -> String {
     format!("{}", usd.parse::<f64>().unwrap() * gbp_to_usd_rate)
 }
@@ -99,17 +126,45 @@ async fn shared_mutable_context() {
     use http_body_util::BodyExt;
     /// for ServiceExt::oneshot
     use tower::util::ServiceExt;
+    use tokio::sync::Mutex;
 
-    let _gbp_to_usd_rate = 1.3;
+    // Docs on how Arc keeps track of how many references there are in it:
+    // https://doc.rust-lang.org/std/sync/struct.Arc.html
+
+    // Mutex is only required if you need to be able to update information in a concurrent-safe way.
+    // If the value being shared is read-only, you don't need a Mutex, just an Arc.
+    let arc = Arc::new(Mutex::new(1.3));
+
+    // LOL this is janky. We have to clone the Arc because we can't move it into the closure.
+    // But arc keeps track of how many clones there are, and when the last clone goes out of scope, it drops the value inside.
+    let arc2 = arc.clone();
+
+    // Mutex lets us share mutable state between handlers, 
+    // and Arc lets us change the state in one handler and see the change in another handler.
+
+    // because our datatime implements Clone, sharing here is a piece of cake 🍰
 
     let _app = Router::<()>::new()
         .route(
             "/usd_to_gbp",
-            get(move |usd: String| async move { convert_usd_to_gbp(usd, _gbp_to_usd_rate) }),
+            get(move |usd: String| async move { 
+                // this gives you access to the thing *inside* the arc, which is the Mutex.
+                // lock() returns a Future.
+                // This lock is async because someone else might be holding the lock, and you have to wait for them to release it.
+                // gotta wait in line to get the lock.
+                let guard = arc.lock().await;
+
+                // when guard goes out of scope, the lock is released.
+                // here we have to dereference the guard to get the value inside the Mutex with "*"
+                convert_usd_to_gbp(usd, *guard) 
+            }),
         )
         .route(
             "/gbp_to_usd",
-            get(move |gbp: String| async move { convert_gbp_to_usd(gbp, _gbp_to_usd_rate) }),
+            get(move |gbp: String| async move { 
+                let guard = arc2.lock().await;
+                convert_gbp_to_usd(gbp, *guard) 
+            }),
         );
 
     let response = _app
@@ -157,7 +212,8 @@ async fn state_shared_context() {
     let _app = Router::new()
         .route("/usd_to_gbp", get(usd_to_gbp_handler))
         .route("/gbp_to_usd", get(gbp_to_usd_handler))
-        .with_state(());
+        .with_state(_gbp_to_usd_rate);
+        // way easier to share state with this ^
 
     let response = _app
         .oneshot(
@@ -176,11 +232,14 @@ async fn state_shared_context() {
 
     assert_eq!(_body_as_string, "130");
 }
-async fn usd_to_gbp_handler() -> String {
-    todo!("Use State to access the exchange rate")
+async fn usd_to_gbp_handler(State(rate): State<f64>, body: String) -> String {
+    let body_as_f64 = body.parse::<f64>().unwrap();
+    
+    (rate * body_as_f64).to_string()
 }
-async fn gbp_to_usd_handler() -> String {
-    todo!("Use State to access the exchange rate")
+async fn gbp_to_usd_handler(State(rate): State<f64>, body: String) -> String {
+    let body_as_f64 = body.parse::<f64>().unwrap();
+    (rate * body_as_f64).to_string()
 }
 
 ///
@@ -199,12 +258,13 @@ async fn mutable_state_shared_context() {
     /// for ServiceExt::oneshot
     use tower::util::ServiceExt;
 
-    let _gbp_to_usd_rate = 1.3;
+    let gbp_to_usd_rate = Arc::new(Mutex::new(1.3));
 
     let _app = Router::new()
         .route("/usd_to_gbp", get(mutable_usd_to_gbp_handler))
         .route("/gbp_to_usd", get(mutable_gbp_to_usd_handler))
-        .with_state(());
+        .route("/set_exchange_rate", post(set_mutable_gbp_to_usd_handler))
+        .with_state(gbp_to_usd_rate);
 
     let response = _app
         .oneshot(
@@ -223,11 +283,29 @@ async fn mutable_state_shared_context() {
 
     assert_eq!(_body_as_string, "130");
 }
-async fn mutable_usd_to_gbp_handler() -> String {
-    todo!("Use State to access the exchange rate")
+async fn mutable_usd_to_gbp_handler(State(rate): State<Arc<Mutex<f64>>>, body: String) -> String {
+    let body_as_f64 = body.parse::<f64>().unwrap();
+
+    let guard = rate.lock().await;
+
+    (*guard * body_as_f64).to_string()
 }
-async fn mutable_gbp_to_usd_handler() -> String {
-    todo!("Use State to access the exchange rate")
+async fn mutable_gbp_to_usd_handler(State(rate): State<Arc<Mutex<f64>>>, body: String) -> String {
+    let body_as_f64 = body.parse::<f64>().unwrap();
+
+    let guard = rate.lock().await;
+
+    (*guard * body_as_f64).to_string()
+}
+async fn set_mutable_gbp_to_usd_handler(State(rate): State<Arc<Mutex<f64>>>, body: String) -> () {
+    let body_as_f64 = body.parse::<f64>().unwrap();
+    println!("body_as_f64: {}", body_as_f64);
+
+    // this let's use update the value inside the Mutex.
+    let mut guard = rate.lock().await;
+
+    // here we assign the new value to the guard.
+    *guard = body_as_f64
 }
 
 ///
@@ -397,6 +475,170 @@ async fn extension_gbp_to_usd_handler() -> String {
 ///
 /// Place it into a web server and test to ensure it meets your requirements.
 ///
-async fn run_users_server() {
-    todo!("Implement the users API")
+pub async fn run_users_server() {
+    let app = 
+        Router::new()
+            .route("/users",        get(get_users))
+            .route("/users/:id",    get(get_user))
+            .route("/users",        post(create_user))
+            .route("/users/:id",    put(update_user))
+            .route("/users/:id",    delete(delete_user))
+            .with_state(UsersState::new());
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
+
+    println!("Listening on {}", listener.local_addr().unwrap());
+
+    axum::serve(listener, app).await.unwrap();
+}
+
+async fn get_users(State(state): State<UsersState>) -> Json<Vec<User>> {
+    Json(state.get_users().await)
+}
+async fn get_user(State(state): State<UsersState>, Path(id): Path<u64>) -> Result<Json<User>, MissingUser> {
+    match state.get_user(id).await {
+        Some(user) => Ok(Json(user)),
+        None => Err(MissingUser { id }),
+    }
+}
+async fn create_user(State(state): State<UsersState>, Json(create_request): Json<UserWithoutId>) -> Json<CreateUserResponse> {
+    let id = state.create_user(create_request).await;
+
+    Json(CreateUserResponse { id })
+}
+async fn update_user(State(state): State<UsersState>, Path(id): Path<u64>, Json(update_request): Json<UpdateUserRequest>) -> Result<(), MissingUser> {
+    let result = state.update_user(id, update_request).await;
+
+    result.map_err(|missing_user| missing_user)
+}
+async fn delete_user(State(state): State<UsersState>, Path(id): Path<u64>) -> Result<(), MissingUser> {
+    let result = state.delete_user(id).await;
+
+    result.map_err(|missing_user| missing_user)
+}
+
+#[derive(Clone)]
+struct UsersState {
+    users: Arc<Mutex<HashMap<u64, UserWithoutId>>>,
+    counter: Arc<Mutex<u64>>,
+}
+
+impl UsersState {
+    fn new() -> Self {
+        Self {
+            users: Arc::new(Mutex::new(HashMap::new())),
+            counter: Arc::new(Mutex::new(0)),
+        }
+    }
+
+    async fn get_users(&self) -> Vec<User> {
+        let guard = self.users.lock().await;
+
+        (*guard).iter().map(|(id, user)| User {
+            id: *id,
+            name: user.name.clone(),
+            email: user.email.clone(),
+        }).collect()
+    }
+
+    async fn get_user(&self, id: u64) -> Option<User> {
+        let guard = self.users.lock().await;
+
+        guard.get(&id).map(|user| User {
+            id,
+            name: user.name.clone(),
+            email: user.email.clone(),
+        })
+    }
+
+    async fn create_user(&self, user: UserWithoutId) -> u64 {
+        let mut guard = self.users.lock().await;
+
+        let id = {
+            let mut counter_guard = self.counter.lock().await;
+            *counter_guard += 1;
+            *counter_guard
+        };
+        guard.insert(id, user);
+        id
+    }
+
+    async fn update_user(&self, id: u64, update: UpdateUserRequest) -> Result<(), MissingUser> {
+        let mut guard = self.users.lock().await;
+
+        if let Some(user) = guard.get_mut(&id) {
+            if let Some(name) = update.name {
+                user.name = name;
+            }
+
+            if let Some(email) = update.email {
+                user.email = email;
+            }
+
+            Ok(())
+        } else {
+            Err(MissingUser { id })
+        }
+    }
+
+    async fn delete_user(&self, id: u64) -> Result<(), MissingUser> {
+        let mut guard = self.users.lock().await;
+
+        if guard.remove(&id).is_some() {
+            Ok(())
+        } else {
+            Err(MissingUser { id })
+        }
+    }
+}
+
+impl IntoResponse for MissingUser {
+    fn into_response(self) -> axum::http::Response<Body> {
+        let response = MissingUserErrorDetails {
+            id: self.id,
+            message: format!("User with id {} not found", self.id),
+        };
+
+        Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Body::from(serde_json::to_string(&response).unwrap()))
+            .unwrap()  
+    }
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug, PartialEq, Eq)]
+struct MissingUserErrorDetails {
+    id: u64,
+    message: String,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug, PartialEq, Eq)]
+struct User {
+    id: u64,
+    name: String,
+    email: String,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug, PartialEq, Eq)]
+struct UpdateUserRequest {
+    name: Option<String>,
+    email: Option<String>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug, PartialEq, Eq)]
+struct UserWithoutId {
+    name: String,
+    email: String,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug, PartialEq, Eq)]
+struct CreateUserResponse {
+    id: u64,
+}
+
+#[derive(serde::Serialize, Clone, Debug, PartialEq, Eq)]
+struct MissingUser {
+    id: u64,
 }
