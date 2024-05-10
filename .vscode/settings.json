@@ -1,0 +1,6 @@
+// add rust-analyzer env
+{
+  "rust-analyzer.cargo.extraEnv": {
+    "DATABASE_URL": "postgres://postgres:postgresdb@localhost:5432/postgres"
+  }
+}

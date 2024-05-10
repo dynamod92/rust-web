@@ -90,6 +90,7 @@ async fn auth_middleware() {
     use tower_http::validate_request::ValidateRequestHeaderLayer;
 
     let _app = Router::<()>::new()
+        // layer allows you to add middleware to the application that will be applied to all routes
         .layer(todo!("Add the ValidateRequestHeaderLayer middleware here"))
         .route("/", get(|| async { "Hello, World!" }));
 

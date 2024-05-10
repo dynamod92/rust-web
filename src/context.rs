@@ -23,9 +23,9 @@ use std::{collections::HashMap, sync::Arc};
 
 #[allow(unused_imports)]
 use axum::extract::State;
-use axum::{extract::Path, response::IntoResponse, Json};
 #[allow(unused_imports)]
 use axum::{body::Body, http::Method, routing::*};
+use axum::{extract::Path, response::IntoResponse, Json};
 #[allow(unused_imports)]
 use hyper::Request;
 use hyper::{Response, StatusCode};
@@ -53,26 +53,26 @@ async fn closure_shared_context() {
     let _app = Router::<()>::new()
         .route(
             "/usd_to_gbp",
-            get(move |usd: String| async move { 
+            get(move |usd: String| async move {
                 // The first instance of "move" moves the closure into the async block. This is necessary because the closure
                 // is a separate type from the async block, and the async block needs to own the closure. The second instance of
                 // "move" moves the variables into the closure. This is necessary because the closure will be called multiple times,
                 // and the variables need to be available each time.
-                convert_usd_to_gbp(usd, _gbp_to_usd_rate) 
+                convert_usd_to_gbp(usd, _gbp_to_usd_rate)
 
                 // if any variable in here doesn't implement Clone, the closure won't implement Clone, which means
                 // it can't be used in the route. This is why the _gbp_to_usd_rate is moved into the closure. F64 does implement Clone.
-                
+
                 // Note: This is *not* an async closure, it just happens to have an async block inside it.
                 // Eventually, Rust will support entire async closures, but for now, you have to use this pattern.
 
                 // 💁‍♀️ If the function wasn't async, you wouldn't need the second "move" keyword at all.
-            }),)
+            }),
+        )
         .route(
             "/gbp_to_usd",
-            get(move |gbp: String| async move { 
-                convert_gbp_to_usd(gbp, _gbp_to_usd_rate) 
-            }),);
+            get(move |gbp: String| async move { convert_gbp_to_usd(gbp, _gbp_to_usd_rate) }),
+        );
 
     let response = _app
         .oneshot(
@@ -124,9 +124,9 @@ fn convert_gbp_to_usd(gbp: String, gbp_to_usd_rate: f64) -> String {
 async fn shared_mutable_context() {
     // for Body::collect
     use http_body_util::BodyExt;
+    use tokio::sync::Mutex;
     /// for ServiceExt::oneshot
     use tower::util::ServiceExt;
-    use tokio::sync::Mutex;
 
     // Docs on how Arc keeps track of how many references there are in it:
     // https://doc.rust-lang.org/std/sync/struct.Arc.html
@@ -139,7 +139,7 @@ async fn shared_mutable_context() {
     // But arc keeps track of how many clones there are, and when the last clone goes out of scope, it drops the value inside.
     let arc2 = arc.clone();
 
-    // Mutex lets us share mutable state between handlers, 
+    // Mutex lets us share mutable state between handlers,
     // and Arc lets us change the state in one handler and see the change in another handler.
 
     // because our datatime implements Clone, sharing here is a piece of cake 🍰
@@ -147,7 +147,7 @@ async fn shared_mutable_context() {
     let _app = Router::<()>::new()
         .route(
             "/usd_to_gbp",
-            get(move |usd: String| async move { 
+            get(move |usd: String| async move {
                 // this gives you access to the thing *inside* the arc, which is the Mutex.
                 // lock() returns a Future.
                 // This lock is async because someone else might be holding the lock, and you have to wait for them to release it.
@@ -156,14 +156,14 @@ async fn shared_mutable_context() {
 
                 // when guard goes out of scope, the lock is released.
                 // here we have to dereference the guard to get the value inside the Mutex with "*"
-                convert_usd_to_gbp(usd, *guard) 
+                convert_usd_to_gbp(usd, *guard)
             }),
         )
         .route(
             "/gbp_to_usd",
-            get(move |gbp: String| async move { 
+            get(move |gbp: String| async move {
                 let guard = arc2.lock().await;
-                convert_gbp_to_usd(gbp, *guard) 
+                convert_gbp_to_usd(gbp, *guard)
             }),
         );
 
@@ -213,7 +213,7 @@ async fn state_shared_context() {
         .route("/usd_to_gbp", get(usd_to_gbp_handler))
         .route("/gbp_to_usd", get(gbp_to_usd_handler))
         .with_state(_gbp_to_usd_rate);
-        // way easier to share state with this ^
+    // way easier to share state with this ^
 
     let response = _app
         .oneshot(
@@ -234,7 +234,7 @@ async fn state_shared_context() {
 }
 async fn usd_to_gbp_handler(State(rate): State<f64>, body: String) -> String {
     let body_as_f64 = body.parse::<f64>().unwrap();
-    
+
     (rate * body_as_f64).to_string()
 }
 async fn gbp_to_usd_handler(State(rate): State<f64>, body: String) -> String {
@@ -476,14 +476,13 @@ async fn extension_gbp_to_usd_handler() -> String {
 /// Place it into a web server and test to ensure it meets your requirements.
 ///
 pub async fn run_users_server() {
-    let app = 
-        Router::new()
-            .route("/users",        get(get_users))
-            .route("/users/:id",    get(get_user))
-            .route("/users",        post(create_user))
-            .route("/users/:id",    put(update_user))
-            .route("/users/:id",    delete(delete_user))
-            .with_state(UsersState::new());
+    let app = Router::new()
+        .route("/users", get(get_users))
+        .route("/users/:id", get(get_user))
+        .route("/users", post(create_user))
+        .route("/users/:id", put(update_user))
+        .route("/users/:id", delete(delete_user))
+        .with_state(UsersState::new());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
         .await
@@ -497,23 +496,36 @@ pub async fn run_users_server() {
 async fn get_users(State(state): State<UsersState>) -> Json<Vec<User>> {
     Json(state.get_users().await)
 }
-async fn get_user(State(state): State<UsersState>, Path(id): Path<u64>) -> Result<Json<User>, MissingUser> {
+async fn get_user(
+    State(state): State<UsersState>,
+    Path(id): Path<u64>,
+) -> Result<Json<User>, MissingUser> {
     match state.get_user(id).await {
         Some(user) => Ok(Json(user)),
         None => Err(MissingUser { id }),
     }
 }
-async fn create_user(State(state): State<UsersState>, Json(create_request): Json<UserWithoutId>) -> Json<CreateUserResponse> {
+async fn create_user(
+    State(state): State<UsersState>,
+    Json(create_request): Json<UserWithoutId>,
+) -> Json<CreateUserResponse> {
     let id = state.create_user(create_request).await;
 
     Json(CreateUserResponse { id })
 }
-async fn update_user(State(state): State<UsersState>, Path(id): Path<u64>, Json(update_request): Json<UpdateUserRequest>) -> Result<(), MissingUser> {
+async fn update_user(
+    State(state): State<UsersState>,
+    Path(id): Path<u64>,
+    Json(update_request): Json<UpdateUserRequest>,
+) -> Result<(), MissingUser> {
     let result = state.update_user(id, update_request).await;
 
     result.map_err(|missing_user| missing_user)
 }
-async fn delete_user(State(state): State<UsersState>, Path(id): Path<u64>) -> Result<(), MissingUser> {
+async fn delete_user(
+    State(state): State<UsersState>,
+    Path(id): Path<u64>,
+) -> Result<(), MissingUser> {
     let result = state.delete_user(id).await;
 
     result.map_err(|missing_user| missing_user)
@@ -536,11 +548,14 @@ impl UsersState {
     async fn get_users(&self) -> Vec<User> {
         let guard = self.users.lock().await;
 
-        (*guard).iter().map(|(id, user)| User {
-            id: *id,
-            name: user.name.clone(),
-            email: user.email.clone(),
-        }).collect()
+        (*guard)
+            .iter()
+            .map(|(id, user)| User {
+                id: *id,
+                name: user.name.clone(),
+                email: user.email.clone(),
+            })
+            .collect()
     }
 
     async fn get_user(&self, id: u64) -> Option<User> {
@@ -604,7 +619,7 @@ impl IntoResponse for MissingUser {
         Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body(Body::from(serde_json::to_string(&response).unwrap()))
-            .unwrap()  
+            .unwrap()
     }
 }
 

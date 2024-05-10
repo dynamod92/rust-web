@@ -33,7 +33,7 @@
 //! 4. Run `sqlx migrate run` to run the migrations in the `migrations` folder.
 //!
 
-use sqlx::{postgres::PgPoolOptions, Postgres};
+use sqlx::{postgres::PgPoolOptions, types::time::PrimitiveDateTime, Pool, Postgres};
 
 ///
 /// EXERCISE 1
@@ -72,7 +72,13 @@ async fn select_one_plus_one() {
         .await
         .unwrap();
 
-    let _sum: i32 = todo!("Insert row here");
+    let _sum: i32 = sqlx::query!("SELECT 1 + 1 AS sum")
+        .fetch_one(&_pool)
+        .await
+        .unwrap()
+        .sum
+        .unwrap();
+    // this property is called sum because that's the alias we gave it in the query.
 
     assert_eq!(_sum, 2);
 }
@@ -96,9 +102,16 @@ async fn select_star() {
         .await
         .unwrap();
 
-    todo!("Insert query here");
+    let todos = sqlx::query!("SELECT * FROM todos")
+        .fetch_all(&_pool)
+        .await
+        .unwrap();
 
-    assert!(true);
+    // for todo in todos { // couldn't get these printing 😢
+    //     println!("{:?}", todo);
+    // }
+
+    assert!(todos.len() > 0);
 }
 
 ///
@@ -127,7 +140,18 @@ async fn insert_todo() {
     let _description = "I should really learn SQLx for my Axum web app";
     let _done = false;
 
-    assert!(true);
+    let id = sqlx::query!(
+        "INSERT INTO todos (title, description, done) VALUES ($1, $2, $3) RETURNING id",
+        _title,
+        _description,
+        _done
+    )
+    .fetch_one(&_pool)
+    .await
+    .unwrap()
+    .id;
+
+    assert!(id > 0);
 }
 
 ///
@@ -146,8 +170,13 @@ async fn update_todo() {
         .await
         .unwrap();
 
-    let _id = 1;
+    let _id = 2;
     let _done = true;
+
+    sqlx::query!("UPDATE todos SET done = $1 WHERE id = $2", _done, _id)
+        .execute(&_pool)
+        .await
+        .unwrap();
 
     assert!(true);
 }
@@ -168,7 +197,12 @@ async fn delete_todo() {
         .await
         .unwrap();
 
-    let _id = 1;
+    let _id = 2;
+
+    sqlx::query!("DELETE FROM todos WHERE id = $1", _id)
+        .execute(&_pool)
+        .await
+        .unwrap();
 
     assert!(true);
 }
@@ -184,6 +218,7 @@ async fn delete_todo() {
 /// table, and use the `sqlx::query_as!` macro to select all columns from the
 /// `todos` table.
 ///
+
 #[tokio::test]
 async fn select_star_as() {
     let _pool = PgPoolOptions::new()
@@ -192,9 +227,34 @@ async fn select_star_as() {
         .await
         .unwrap();
 
-    todo!("Insert query here");
+    let todos = sqlx::query_as!(
+        Todo,
+        "SELECT id, title, description, done FROM todos" // could also select created_at if we wanted
+    )
+    .fetch_all(&_pool)
+    .await
+    .unwrap();
 
-    assert!(true);
+    assert!(todos.len() > 0);
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug, PartialEq, Eq)]
+struct Todo {
+    id: i64,
+    title: String,
+    description: String,
+    done: bool,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug, PartialEq, Eq)]
+struct CreateTodo {
+    title: String,
+    description: String,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug, PartialEq, Eq)]
+struct CreatedTodo {
+    id: i64,
 }
 
 ///
@@ -203,6 +263,117 @@ async fn select_star_as() {
 /// In this project, you will build a simple CRUD API for a todo list,
 /// which uses sqlx for persistence.
 ///
+///
+use axum::{
+    body::Body,
+    extract::{Path, State},
+    http::{Method, Request},
+    response::Html,
+    routing::*,
+    Json, Router,
+};
+
 pub async fn run_todo_app() {
-    todo!("Implement todo app");
+    let clients: Clients = Clients::new().await;
+
+    let app = Router::new()
+        .route("/", get(get_todos_handler))
+        .route("/", post(create_todo_handler))
+        // .route("/:id", get(get_todo_handler))
+        // .route("/:id", put(update_todo_handler))
+        // .route("/:id", delete(delete_todo_handler))
+        .with_state(clients);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
+
+    println!("Listening on {}", listener.local_addr().unwrap());
+
+    axum::serve(listener, app).await.unwrap();
 }
+
+#[derive(Clone)]
+struct Clients {
+    pool: Pool<Postgres>,
+    http_client: reqwest::Client,
+}
+
+impl Clients {
+    async fn new() -> Self {
+        let pool = PgPoolOptions::new()
+            .max_connections(16)
+            .connect(&std::env::var("DATABASE_URL").unwrap())
+            .await
+            .unwrap();
+
+        Self {
+            pool,
+            http_client: reqwest::Client::new(),
+        }
+    }
+}
+
+async fn get_todos_handler(State(clients): State<Clients>) -> Json<Vec<Todo>> {
+    let pool = &clients.pool;
+
+    let todos = sqlx::query_as!(Todo, "SELECT id, title, description, done FROM todos")
+        .fetch_all(pool)
+        .await
+        .unwrap();
+
+    Json(todos)
+}
+
+async fn create_todo_handler(State(state): State<Clients>, Json(create): Json<CreateTodo>) -> Json<CreatedTodo> {
+    let pool = &state.pool;
+
+    let id = sqlx::query!(
+        "INSERT INTO todos (title, description, done) VALUES ($1, $2, false) RETURNING id",
+        create.title,
+        create.description
+    ).fetch_one(pool).await.unwrap().id;    
+
+    Json(CreatedTodo { id })
+}
+
+// async fn get_todo_handler(State(clients): State<Clients>, params: Path<i64>) -> Json<Todo> {
+//     let todo = sqlx::query_as!(
+//         Todo,
+//         "SELECT id, title, description, done FROM todos WHERE id = $1",
+//         params
+//     )
+//     .fetch_one(&clients.pool)
+//     .await
+//     .unwrap();
+
+//     Json(Todo {
+//         id: todo.id,
+//         title: todo.title,
+//         description: todo.description,
+//         done: todo.done,
+//     })
+// }
+
+// async fn update_todo_handler(State(clients): State<Clients>, params: Path<i64>) -> Json<Todo> {
+//     let todo = sqlx::query_as!(
+//         Todo,
+//         "UPDATE todos SET done = $1 WHERE id = $2 RETURNING id, title, description, done",
+//         true,
+//         params.into_inner()
+//     )
+//     .fetch_one(&clients.pool)
+//     .await
+//     .unwrap();
+
+//     Json(todo)
+// }
+
+// async fn delete_todo_handler(State(clients): State<Clients>, params: Path<i64>,) -> Html<&'static str> {
+//     sqlx::query!("DELETE FROM todos WHERE id = $1", params.into_inner())
+//         .execute(&clients.pool)
+//         .await
+//         .unwrap();
+
+//     Html("Todo deleted")
+// }

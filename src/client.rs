@@ -16,6 +16,7 @@
 
 use axum::{
     body::Body,
+    extract::State,
     http::{Method, Request},
     response::Html,
     routing::*,
@@ -50,7 +51,15 @@ pub async fn cat_fact_server() {
     axum::serve(listener, app).await.unwrap();
 }
 async fn cat_fact_handler() -> Html<String> {
-    todo!("Using reqwest::get and .json, get a random cat fact from https://catfact.ninja/fact and return it as an HTML response.")
+    //Using reqwest::get and .json, get a random cat fact from https://catfact.ninja/fact and return it as an HTML response.
+    let response = reqwest::get("https://catfact.ninja/fact")
+        .await
+        .unwrap()
+        .json::<CatFact>()
+        .await
+        .unwrap();
+
+    Html(format!("<h1>{}</h1>", response.fact))
 }
 #[derive(serde::Deserialize)]
 struct CatFact {
@@ -93,10 +102,16 @@ struct CatFact {
 /// One has been provided for you in the `posts_server` function. You can
 /// set the body of a request using the `.body` method.`
 ///
-async fn posts_server() {
-    let app = Router::<()>::new();
+pub async fn posts_server() {
+    // this basically outlines how you shouldn't be using
+    // reqwest in a real application. You should create a client
+    // that is shared across the application and used just for that client.
+    let client = reqwest::Client::new();
 
-    let _client = reqwest::Client::new();
+    let app = Router::new()
+        .route("/posts", get(posts_handler))
+        .route("/comments", get(comments_handler))
+        .with_state(client);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
         .await
@@ -106,6 +121,35 @@ async fn posts_server() {
 
     axum::serve(listener, app).await.unwrap();
 }
+
+async fn posts_handler(State(client): State<reqwest::Client>) -> Json<Vec<Post>> {
+    //Using reqwest::get and .json, get a random cat fact from https://catfact.ninja/fact and return it as an HTML response.
+    let response = client
+        .get("https://jsonplaceholder.typicode.com/posts")
+        .send()
+        .await
+        .unwrap()
+        .json::<Vec<Post>>()
+        .await
+        .unwrap();
+
+    Json(response)
+}
+
+async fn comments_handler(State(client): State<reqwest::Client>) -> Json<Vec<Comment>> {
+    //Using reqwest::get and .json, get a random cat fact from https://catfact.ninja/fact and return it as an HTML response.
+    let response: Vec<Comment> = client
+        .get("https://jsonplaceholder.typicode.com/comments")
+        .send()
+        .await
+        .unwrap()
+        .json::<Vec<Comment>>()
+        .await
+        .unwrap();
+
+    Json(response)
+}
+
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Post {
@@ -131,6 +175,68 @@ struct Comment {
 /// to any web server of your choosing. You should use Reqwest to make the
 /// requests.
 ///
+/// Create a web app that talks to a third-party web server of your choosing using Reqwest.
+
 pub async fn graduation_project() {
-    todo!("Create a web app that talks to a third-party web server of your choosing using Reqwest.")
+    // this basically outlines how you shouldn't be using
+    // reqwest in a real application. You should create a client
+    // that is shared across the application and used just for that client.
+    let client = reqwest::Client::new();
+
+    let app = Router::new()
+        .route("/reds", get(reds_handler))
+        .route("/whites", get(whites_handler))
+        .with_state(client);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
+
+    println!("Listening on {}", listener.local_addr().unwrap());
+
+    axum::serve(listener, app).await.unwrap();
+}
+
+async fn reds_handler(State(client): State<reqwest::Client>) -> Json<Vec<Wine>> {
+    //Using reqwest::get and .json, get a random cat fact from https://catfact.ninja/fact and return it as an HTML response.
+    let response = client
+        .get("https://api.sampleapis.com/wines/reds")
+        .send()
+        .await
+        .unwrap()
+        .json::<Vec<Wine>>()
+        .await
+        .unwrap();
+
+    Json(response)
+}
+
+async fn whites_handler(State(client): State<reqwest::Client>) -> Json<Vec<Wine>> {
+    //Using reqwest::get and .json, get a random cat fact from https://catfact.ninja/fact and return it as an HTML response.
+    let response = client
+        .get("https://api.sampleapis.com/wines/whites")
+        .send()
+        .await
+        .unwrap()
+        .json::<Vec<Wine>>()
+        .await
+        .unwrap();
+
+    Json(response)
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+struct Rating {
+    average: String,
+    reviews: String,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+struct Wine {
+    winery: String,
+    wine: String,
+    rating: Rating,
+    location: String,
+    image: String,
+    id: u32,
 }
